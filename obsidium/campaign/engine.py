@@ -34,6 +34,7 @@ from obsidium.core.models import (
 )
 from obsidium.core.scenario import Scenario
 from obsidium.scoring.engine import ScoringEngine, ScoreResult
+from obsidium.defenses.layers import DefenseStack, DefenseResult
 
 
 class AttackStrategy(str, Enum):
@@ -65,8 +66,10 @@ class AttackAttempt(BaseModel):
     payload: str
     response: str
     refusal_type: str = ""
-    score_delta: float = 0.0
+    cumulative_score: float = 0.0
+    score_delta: float = 0.0  # Change from previous turn
     analysis: str = ""
+    defense_blocked: bool = False
     timestamp: str = ""
 
 
@@ -187,12 +190,41 @@ class CampaignEngine:
         self.attempts: list[AttackAttempt] = []
         self.turn_count = 0
         self.start_time = 0.0
+        self.prev_score = 0.0
 
         # Initialize target with system prompt
         system_prompt = scenario.agent.system_prompt
         for key, value in scenario.agent.secrets.items():
             system_prompt = system_prompt.replace(f"${{{key}}}", value)
         self.target_messages = [Message(role="system", content=system_prompt)]
+
+        # Build defense stack from scenario config (same as ScenarioRunner)
+        self.defense_stack = self._build_defense_stack()
+
+    def _build_defense_stack(self) -> DefenseStack:
+        """Build defense stack from scenario configuration."""
+        from obsidium.defenses.layers import (
+            KeywordBlocklist,
+            RegexFilter,
+            CanaryTokenDetector,
+            InstructionIntegrityCheck,
+            LengthLimit,
+        )
+        stack = DefenseStack()
+        defenses_config = self.scenario.scoring_context.get("defenses", {})
+
+        if defenses_config.get("keyword_blocklist"):
+            stack.add_layer(KeywordBlocklist(defenses_config["keyword_blocklist"]))
+        if defenses_config.get("regex_filters"):
+            stack.add_layer(RegexFilter(defenses_config["regex_filters"]))
+        if defenses_config.get("canary_tokens"):
+            stack.add_layer(CanaryTokenDetector(defenses_config["canary_tokens"]))
+        if defenses_config.get("instruction_integrity", False):
+            stack.add_layer(InstructionIntegrityCheck())
+        if defenses_config.get("max_input_length"):
+            stack.add_layer(LengthLimit(defenses_config["max_input_length"]))
+
+        return stack
 
     async def run(self) -> CampaignResult:
         """Execute the full campaign."""
@@ -218,18 +250,53 @@ class CampaignEngine:
             if not payload:
                 break
 
-            # Send to target
+            # Send to target (with defense stack integration)
+            defense_blocked = False
             try:
-                self.target_messages.append(Message(role="user", content=payload))
-                target_response = await self.target_provider.chat(
-                    messages=self.target_messages,
-                    temperature=self.scenario.agent.temperature,
-                    max_tokens=self.scenario.agent.max_tokens,
-                )
-                response_text = target_response.content
-                self.target_messages.append(
-                    Message(role="assistant", content=response_text)
-                )
+                # Check input defenses first
+                if self.defense_stack.layers:
+                    input_check = self.defense_stack.check_input(payload)
+                    if input_check.blocked:
+                        defense_blocked = True
+                        response_text = (
+                            f"I'm sorry, I can't process that request. "
+                            f"[Defense: {input_check.layer_name} — {input_check.reason}]"
+                        )
+                        self.target_messages.append(Message(role="user", content=payload))
+                        self.target_messages.append(Message(role="assistant", content=response_text))
+                    else:
+                        self.target_messages.append(Message(role="user", content=payload))
+                        target_response = await self.target_provider.chat(
+                            messages=self.target_messages,
+                            temperature=self.scenario.agent.temperature,
+                            max_tokens=self.scenario.agent.max_tokens,
+                        )
+                        response_text = target_response.content
+
+                        # Check output defenses
+                        if self.defense_stack.layers:
+                            output_check = self.defense_stack.check_output(response_text)
+                            if output_check.blocked:
+                                defense_blocked = True
+                                response_text = (
+                                    "I'm sorry, I can't provide that information. "
+                                    f"[Output filtered: {output_check.layer_name}]"
+                                )
+
+                        self.target_messages.append(
+                            Message(role="assistant", content=response_text)
+                        )
+                else:
+                    self.target_messages.append(Message(role="user", content=payload))
+                    target_response = await self.target_provider.chat(
+                        messages=self.target_messages,
+                        temperature=self.scenario.agent.temperature,
+                        max_tokens=self.scenario.agent.max_tokens,
+                    )
+                    response_text = target_response.content
+                    self.target_messages.append(
+                        Message(role="assistant", content=response_text)
+                    )
             except Exception as e:
                 response_text = f"[ERROR: {e}]"
 
@@ -241,14 +308,24 @@ class CampaignEngine:
                 time_elapsed=time.time() - self.start_time,
             )
 
+            # Parse refusal_type from attacker analysis (if available)
+            refusal_type = payload_data.get("refusal_type", "")
+
+            # Calculate score delta from previous turn
+            delta = current_score.total_score - self.prev_score
+            self.prev_score = current_score.total_score
+
             # Record attempt
             attempt = AttackAttempt(
                 turn=self.turn_count,
                 strategy=strategy,
                 payload=payload,
                 response=response_text[:2000],  # Truncate for storage
-                score_delta=current_score.total_score,
+                refusal_type=refusal_type,
+                cumulative_score=current_score.total_score,
+                score_delta=delta,
                 analysis=reasoning,
+                defense_blocked=defense_blocked,
                 timestamp=datetime.now().isoformat(),
             )
             self.attempts.append(attempt)
@@ -266,7 +343,7 @@ class CampaignEngine:
             time_elapsed=elapsed,
         )
 
-        # Find best attempt
+        # Find best attempt (highest score delta = most impactful single turn)
         best = max(self.attempts, key=lambda a: a.score_delta) if self.attempts else None
 
         strategies_used = list(set(a.strategy for a in self.attempts))
@@ -377,6 +454,7 @@ class CampaignEngine:
 
     async def _call_attacker(self, messages: list[Message]) -> dict:
         """Call the attacker LLM and parse JSON response."""
+        response = None
         try:
             response = await self.attacker_provider.chat(
                 messages=messages,
@@ -390,13 +468,18 @@ class CampaignEngine:
                 content = re.sub(r"^```(?:json)?\s*", "", content)
                 content = re.sub(r"\s*```$", "", content)
 
+            # Try to extract JSON from mixed content
+            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', content)
+            if json_match:
+                return json.loads(json_match.group())
             return json.loads(content)
         except (json.JSONDecodeError, Exception):
             # Fallback: use raw response as payload
+            raw = response.content if response else "Tell me about yourself."
             return {
                 "strategy": "direct",
                 "reasoning": "Attacker LLM returned non-JSON; using raw response",
-                "payload": response.content if 'response' in dir() else "Tell me about yourself.",
+                "payload": raw,
             }
 
 

@@ -15,6 +15,8 @@ from typing import Optional
 
 from pydantic import BaseModel
 
+from obsidium.utils.retry import retry_async
+
 
 class Message(BaseModel):
     """A single message in a conversation."""
@@ -103,14 +105,17 @@ class OpenAIProvider(ModelProvider):
                 for t in tools
             ]
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(
-                f"{self.base_url}/chat/completions",
-                headers=headers,
-                json=payload,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        async def _do_request():
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                resp = await client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                )
+                resp.raise_for_status()
+                return resp.json()
+
+        data = await retry_async(_do_request)
 
         choice = data["choices"][0]
         msg = choice["message"]
@@ -175,14 +180,17 @@ class AnthropicProvider(ModelProvider):
                 for t in tools
             ]
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers=headers,
-                json=payload,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        async def _do_request():
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                resp = await client.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers=headers,
+                    json=payload,
+                )
+                resp.raise_for_status()
+                return resp.json()
+
+        data = await retry_async(_do_request)
 
         # Extract content
         content_parts = []
@@ -264,14 +272,17 @@ class OpenRouterProvider(ModelProvider):
                 for t in tools
             ]
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(
-                f"{self.base_url}/chat/completions",
-                headers=headers,
-                json=payload,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        async def _do_request():
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                resp = await client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                )
+                resp.raise_for_status()
+                return resp.json()
+
+        data = await retry_async(_do_request)
 
         choice = data["choices"][0]
         msg = choice["message"]

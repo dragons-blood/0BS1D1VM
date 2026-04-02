@@ -7,7 +7,7 @@
  ╚═════╝ ╚═════╝ ╚══════╝ ╚═╝╚═════╝  ╚═╝  ╚═══╝  ╚═╝     ╚═╝
 ```
 
-# 0BS1D1VM v1.0 — The Adversarial Range for AI Agents
+# 0BS1D1VM v1.1 — The Adversarial Range for AI Agents
 
 **An open-source training ground for AI red teamers, defenders, and security researchers.**
 
@@ -15,6 +15,26 @@ Think "Hack The Box" for the agentic AI era. Intentionally vulnerable AI agents.
 
 > *"Jailbreaking a chatbot produces text. Jailbreaking an agent produces **actions**."*
 > — @elder_plinius
+
+---
+
+## What's New in v1.1
+
+### Bug Fixes & Hardening
+- **Campaign engine now integrates defense stack** — campaigns against hardened scenarios (with keyword blocklists, regex filters, canary detectors) now actually enforce those defenses. Previously campaign mode bypassed defenses entirely.
+- **Fixed `score_delta` tracking** — campaign attempts now correctly track both `cumulative_score` and `score_delta` (change per turn), instead of misreporting cumulative score as delta.
+- **Fixed refusal type classification** — campaign attempts now properly parse and record the attacker LLM's refusal type classification.
+- **Fixed JSON parsing in attacker LLM** — more robust extraction of JSON from mixed-content attacker responses, and fixed a scoping bug in the fallback handler.
+- **Retry with exponential backoff** — all model providers (OpenAI, Anthropic, OpenRouter) now retry on rate limits (429), server errors (5xx), and timeouts with jitter and Retry-After header support.
+- **Removed unused `jinja2` dependency** — was listed but never imported.
+
+### Test Suite (96 tests)
+- Full test coverage for: scorers (17), defense layers (7), scoring engine, scenario loading/validation/discovery, model provider parsing, and payload library.
+- All tests pass in 0.12s.
+
+### Examples
+- `examples/basic_usage.py` — programmatic scenario running and scoring
+- `examples/custom_scorer.py` — creating and registering custom scorers
 
 ---
 
