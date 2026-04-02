@@ -209,6 +209,82 @@ class AnthropicProvider(ModelProvider):
         )
 
 
+class OpenRouterProvider(ModelProvider):
+    """OpenRouter provider — access hundreds of models through a unified API."""
+
+    def __init__(
+        self,
+        model: str = "anthropic/claude-sonnet-4-20250514",
+        api_key: str | None = None,
+    ):
+        self.model = model
+        self.base_url = "https://openrouter.ai/api/v1"
+        self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
+
+    def name(self) -> str:
+        return f"openrouter:{self.model}"
+
+    async def chat(
+        self,
+        messages: list[Message],
+        tools: list[ToolDefinition] | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ) -> ModelResponse:
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "0BS1D1VM",
+            "X-Title": "0BS1D1VM",
+        }
+
+        payload: dict = {
+            "model": self.model,
+            "messages": [
+                m.model_dump(
+                    exclude_none=True,
+                    exclude={"tool_calls"} if not m.tool_calls else set(),
+                )
+                for m in messages
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+
+        if tools:
+            payload["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.parameters,
+                    },
+                }
+                for t in tools
+            ]
+
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+        choice = data["choices"][0]
+        msg = choice["message"]
+
+        return ModelResponse(
+            content=msg.get("content", "") or "",
+            tool_calls=msg.get("tool_calls", []),
+            raw=data,
+            model=data.get("model", self.model),
+            usage=data.get("usage", {}),
+        )
+
+
 class OllamaProvider(ModelProvider):
     """Local Ollama provider."""
 
@@ -251,9 +327,11 @@ def parse_model_string(model_str: str) -> ModelProvider:
     Formats:
         openai:model-name
         anthropic:model-name
+        openrouter:model-name
+        google:model-name      (routes through OpenRouter with google/ prefix)
         ollama:model-name
-        local:model-name (alias for ollama)
-        model-name (defaults to openai)
+        local:model-name        (alias for ollama)
+        model-name              (defaults to openai)
     """
     if ":" in model_str:
         provider, model = model_str.split(":", 1)
@@ -267,7 +345,16 @@ def parse_model_string(model_str: str) -> ModelProvider:
         return OpenAIProvider(model=model)
     elif provider == "anthropic":
         return AnthropicProvider(model=model)
+    elif provider == "openrouter":
+        return OpenRouterProvider(model=model)
+    elif provider == "google":
+        # Route Google models through OpenRouter with google/ prefix
+        or_model = model if model.startswith("google/") else f"google/{model}"
+        return OpenRouterProvider(model=or_model)
     elif provider in ("ollama", "local"):
         return OllamaProvider(model=model)
     else:
-        raise ValueError(f"Unknown provider: {provider}. Use openai, anthropic, or ollama.")
+        raise ValueError(
+            f"Unknown provider: {provider}. "
+            "Use openai, anthropic, openrouter, google, or ollama."
+        )

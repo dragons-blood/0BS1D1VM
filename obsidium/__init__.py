@@ -8,5 +8,5 @@ Created by @elder_plinius and the BASI community.
 Fortes fortuna iuvat.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "elder_plinius"

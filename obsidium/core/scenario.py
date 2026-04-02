@@ -77,6 +77,9 @@ class Scenario(BaseModel):
     max_turns: int = 10
     time_limit: int = 300  # seconds
 
+    # Extra context passed to scorers (e.g., target_phrases, allowed_topics, etc.)
+    scoring_context: dict = {}
+
     # Optional Python hooks
     setup_hook: Optional[str] = None  # Called before scenario starts
     teardown_hook: Optional[str] = None  # Called after scenario ends
@@ -156,7 +159,7 @@ def validate_scenario(scenario: Scenario) -> list[str]:
     valid_categories = [
         "prompt-injection", "tool-poisoning", "mcp-exploits",
         "multi-agent", "system-prompt-extraction", "confused-deputy",
-        "supply-chain", "data-exfiltration",
+        "supply-chain", "data-exfiltration", "cyber",
     ]
     if scenario.category not in valid_categories:
         issues.append(f"Unknown category: {scenario.category}. Valid: {valid_categories}")

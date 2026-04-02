@@ -118,6 +118,10 @@ class ScoringEngine:
         tool_names = [t.get("name", "") for t in scenario.agent.tools]
         context["allowed_tools"] = tool_names
 
+        # Merge in scenario-level scoring context (target_phrases, etc.)
+        if scenario.scoring_context:
+            context.update(scenario.scoring_context)
+
         return context
 
     def _calculate_grade(
