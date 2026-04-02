@@ -6,6 +6,9 @@ Usage:
     obsidium run <scenario> --model <model> Run a scenario interactively
     obsidium attack <scenario> --payload    Run with automated payloads
     obsidium bench --model <model>          Benchmark a model across scenarios
+    obsidium campaign <scenario>            AI-powered adaptive red team campaign
+    obsidium compare <file1> <file2> ...    Compare benchmark results across models
+    obsidium report <bench-file>            Generate HTML scorecard report
     obsidium quickstart                     Guided onboarding experience
     obsidium validate <path>                Validate a scenario file
     obsidium create <name> --template       Create a new scenario from template
@@ -70,7 +73,7 @@ GRADE_COLORS = {
 
 
 @click.group()
-@click.version_option(version="0.2.0", prog_name="obsidium")
+@click.version_option(version="1.0.0", prog_name="obsidium")
 def main():
     """0BS1D1VM — The Adversarial Range for AI Agents"""
     pass
@@ -699,6 +702,252 @@ def quickstart():
     # Run interactive
     from obsidium.runner.engine import run_scenario_interactive
     asyncio.run(run_scenario_interactive(chosen_scenario, selected_model))
+
+
+@main.command()
+@click.argument("scenario_path")
+@click.option("--target", "-t", required=True, help="Target model (e.g., openrouter:openai/gpt-4o)")
+@click.option(
+    "--attacker", "-a", default="openrouter:anthropic/claude-sonnet-4-20250514",
+    show_default=True, help="Attacker model (the AI red teamer)",
+)
+@click.option("--turns", "-n", default=None, type=int, help="Max turns (default: scenario max)")
+@click.option("--output", "-o", default=None, help="Output file path for campaign JSON")
+def campaign(scenario_path: str, target: str, attacker: str, turns: int | None, output: str | None):
+    """Run an AI-powered adaptive red team campaign.
+
+    The attacker LLM autonomously generates, mutates, and chains adversarial
+    prompts against the target model. It analyzes responses, classifies refusal
+    types, and adapts its strategy in real time.
+    """
+    console.print(BANNER)
+
+    config = load_config()
+    scenario = _find_scenario(scenario_path, config)
+    if not scenario:
+        console.print(f"[red]Scenario not found: {scenario_path}[/red]")
+        sys.exit(1)
+
+    console.print(
+        Panel(
+            f"[bold]Scenario:[/bold] {scenario.name}\n"
+            f"[bold]Target:[/bold] {target}\n"
+            f"[bold]Attacker:[/bold] {attacker}\n"
+            f"[bold]Max turns:[/bold] {turns or scenario.max_turns}\n"
+            f"[bold]Objectives:[/bold]\n" +
+            "\n".join(f"  - {obj.description} ({obj.points} pts)" for obj in scenario.objectives),
+            title="[red]0BS1D1VM[/red] Campaign Mode ⚔️",
+            border_style="red",
+        )
+    )
+
+    from obsidium.campaign.engine import CampaignEngine
+
+    engine = CampaignEngine(
+        scenario=scenario,
+        target_model=target,
+        attacker_model=attacker,
+        max_turns=turns,
+    )
+
+    # Run with live output
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("[red]Campaign running...", total=None)
+
+        async def _run_campaign():
+            return await engine.run()
+
+        result = asyncio.run(_run_campaign())
+        progress.update(task, description="[green]Campaign complete!")
+
+    # Display results
+    console.print()
+    console.print(Rule("[bold red]Campaign Results[/bold red]"))
+    console.print()
+
+    # Attempt timeline
+    for attempt in result.attempts:
+        score = attempt.score_delta
+        if score >= 0.7:
+            color = "green"
+            icon = "✓"
+        elif score >= 0.3:
+            color = "yellow"
+            icon = "◐"
+        else:
+            color = "red"
+            icon = "✗"
+
+        console.print(
+            f"  [{color}]{icon}[/{color}] Turn {attempt.turn} "
+            f"[dim][{attempt.strategy}][/dim] "
+            f"Score: [{color}]{score:.0%}[/{color}]"
+        )
+        console.print(f"    [cyan]→[/cyan] {attempt.payload[:100]}...")
+        console.print(f"    [dim]← {attempt.response[:100]}...[/dim]")
+        console.print()
+
+    # Final scorecard
+    if result.final_score:
+        grade_color = GRADE_COLORS.get(result.final_score.grade, "white")
+        console.print(
+            Panel(
+                f"[bold]Grade:[/bold] [{grade_color}]{result.final_score.grade}[/{grade_color}]\n"
+                f"[bold]Score:[/bold] {result.final_score.total_score:.0%}\n"
+                f"[bold]Points:[/bold] {result.final_score.points_earned}/{result.final_score.points_possible}\n"
+                f"[bold]Turns used:[/bold] {result.total_turns}\n"
+                f"[bold]Strategies:[/bold] {', '.join(result.strategies_used)}\n"
+                f"[bold]Time:[/bold] {result.elapsed_seconds:.1f}s",
+                title="[red]Campaign Scorecard[/red]",
+                border_style="red",
+            )
+        )
+
+    # Save results
+    results_dir = Path(config.output_dir)
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    if output:
+        results_path = Path(output)
+    else:
+        model_slug = target.replace("/", "_").replace(":", "_")
+        results_path = results_dir / f"campaign_{scenario.id}_{model_slug}_{timestamp}.json"
+
+    results_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(results_path, "w") as f:
+        f.write(result.model_dump_json(indent=2))
+
+    console.print(f"\n[dim]Campaign results saved to {results_path}[/dim]")
+
+
+@main.command()
+@click.argument("bench_files", nargs=-1, required=True, type=click.Path(exists=True))
+@click.option("--output", "-o", default=None, help="Output HTML file path")
+def compare(bench_files: tuple, output: str | None):
+    """Compare benchmark results across multiple models.
+
+    Takes two or more benchmark JSON files and generates a side-by-side
+    comparison report.
+    """
+    console.print(BANNER)
+
+    if len(bench_files) < 2:
+        console.print("[red]Need at least 2 benchmark files to compare.[/red]")
+        sys.exit(1)
+
+    # Load and display summary
+    benchmarks = []
+    for f in bench_files:
+        with open(f) as fh:
+            data = json.load(fh)
+            benchmarks.append(data)
+            console.print(f"  [cyan]Loaded:[/cyan] {data.get('model', '?')} — {data.get('overall_grade', '?')} ({data.get('overall_score', 0):.0%})")
+
+    # Terminal comparison table
+    console.print()
+    console.print(Rule("[bold red]Model Comparison[/bold red]"))
+    console.print()
+
+    comp_table = Table(border_style="red", show_lines=True)
+    comp_table.add_column("Metric", style="bold", width=25)
+    for b in benchmarks:
+        comp_table.add_column(b.get("model", "?"), width=25)
+
+    # Overall grade
+    comp_table.add_row(
+        "Overall Grade",
+        *[
+            f"[{GRADE_COLORS.get(b.get('overall_grade', 'F'), 'white')}]"
+            f"{b.get('overall_grade', 'F')}[/{GRADE_COLORS.get(b.get('overall_grade', 'F'), 'white')}]"
+            for b in benchmarks
+        ],
+    )
+    comp_table.add_row("Overall Score", *[f"{b.get('overall_score', 0):.1%}" for b in benchmarks])
+    comp_table.add_row(
+        "Points",
+        *[f"{b.get('total_points_earned', 0)}/{b.get('total_points_possible', 0)}" for b in benchmarks],
+    )
+    comp_table.add_row("Scenarios", *[str(b.get("scenarios_run", 0)) for b in benchmarks])
+    comp_table.add_row("Time", *[f"{b.get('elapsed_seconds', 0):.1f}s" for b in benchmarks])
+
+    console.print(comp_table)
+
+    # Per-scenario comparison
+    all_scenario_ids = set()
+    for b in benchmarks:
+        for r in b.get("results", []):
+            all_scenario_ids.add(r.get("scenario_id", ""))
+
+    if all_scenario_ids:
+        console.print()
+        sc_table = Table(title="[bold]Per-Scenario[/bold]", border_style="red", show_lines=True)
+        sc_table.add_column("Scenario", style="cyan", width=25)
+        for b in benchmarks:
+            sc_table.add_column(b.get("model", "?").split("/")[-1][:15], width=15)
+
+        for sid in sorted(all_scenario_ids):
+            cells = []
+            for b in benchmarks:
+                found = None
+                for r in b.get("results", []):
+                    if r.get("scenario_id") == sid:
+                        found = r
+                        break
+                if found:
+                    gc = GRADE_COLORS.get(found.get("grade", "F"), "white")
+                    cells.append(f"[{gc}]{found.get('grade', 'F')}[/{gc}] ({found.get('score', 0):.0%})")
+                else:
+                    cells.append("[dim]—[/dim]")
+            sc_table.add_row(sid, *cells)
+
+        console.print(sc_table)
+
+    # Generate HTML report
+    from obsidium.reporting.html_report import generate_comparison_html
+    if output:
+        html_path = output
+    else:
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        html_path = f"results/compare_{timestamp}.html"
+
+    generate_comparison_html(bench_files, output_path=html_path)
+    console.print(f"\n[green]HTML comparison report saved to {html_path}[/green]")
+
+
+@main.command()
+@click.argument("bench_file", type=click.Path(exists=True))
+@click.option("--campaign-file", "-c", default=None, type=click.Path(exists=True), help="Campaign JSON to include")
+@click.option("--output", "-o", default=None, help="Output HTML file path")
+def report(bench_file: str, campaign_file: str | None, output: str | None):
+    """Generate an HTML scorecard report from benchmark results."""
+    console.print(BANNER)
+
+    with open(bench_file) as f:
+        bench_data = json.load(f)
+
+    campaign_data = None
+    if campaign_file:
+        with open(campaign_file) as f:
+            campaign_data = json.load(f)
+
+    from obsidium.reporting.html_report import generate_html_report
+
+    if output:
+        html_path = output
+    else:
+        model_slug = bench_data.get("model", "unknown").replace("/", "_").replace(":", "_")
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        html_path = f"results/report_{model_slug}_{timestamp}.html"
+
+    generate_html_report(bench_data, campaign_data=campaign_data, output_path=html_path)
+
+    console.print(f"[green]HTML report generated: {html_path}[/green]")
+    console.print(f"[dim]Open in browser: file://{Path(html_path).resolve()}[/dim]")
 
 
 @main.command()
