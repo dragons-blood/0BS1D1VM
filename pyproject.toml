@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "obsidium"
+version = "0.1.0"
+description = "The Adversarial Range for AI Agents — open-source training ground for AI red teamers"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "elder_plinius", email = "dragonsbl00d@proton.me"},
+]
+keywords = ["ai-safety", "red-team", "adversarial", "agents", "prompt-injection", "security"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "pyyaml>=6.0",
+    "rich>=13.0",
+    "click>=8.0",
+    "httpx>=0.25.0",
+    "jinja2>=3.1",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+openai = ["openai>=1.0"]
+anthropic = ["anthropic>=0.30"]
+google = ["google-generativeai>=0.5"]
+all = ["openai>=1.0", "anthropic>=0.30", "google-generativeai>=0.5"]
+dev = ["pytest>=7.0", "ruff>=0.1"]
+
+[project.scripts]
+obsidium = "obsidium.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/elder-plinius/0BS1D1VM"
+Repository = "https://github.com/elder-plinius/0BS1D1VM"
+Issues = "https://github.com/elder-plinius/0BS1D1VM/issues"
+
+[tool.setuptools.packages.find]
+include = ["obsidium*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
