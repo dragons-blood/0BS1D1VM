@@ -44,5 +44,6 @@ class TestPayloadLibrary:
             "prompt-injection", "system-prompt-extraction", "confused-deputy",
             "data-exfiltration", "tool-poisoning", "supply-chain",
             "mcp-exploits", "multi-agent", "cyber",
+            "reasoning-exploitation", "memory-poisoning",
         }
         assert expected == set(PAYLOAD_CATEGORIES)

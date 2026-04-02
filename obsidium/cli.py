@@ -73,16 +73,16 @@ GRADE_COLORS = {
 
 
 @click.group()
-@click.version_option(version="1.0.0", prog_name="obsidium")
+@click.version_option(version="1.2.0", prog_name="obsidium")
 def main():
     """0BS1D1VM — The Adversarial Range for AI Agents"""
     pass
 
 
-@main.command()
+@main.command("list")
 @click.option("--category", "-c", help="Filter by category")
 @click.option("--difficulty", "-d", help="Filter by difficulty")
-def list(category: str | None, difficulty: str | None):
+def list_scenarios(category: str | None, difficulty: str | None):
     """List available scenarios."""
     console.print(BANNER)
 

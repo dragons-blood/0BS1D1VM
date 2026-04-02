@@ -1,5 +1,5 @@
 name: "Hardened Instruction Override"
-id: pi-002
+id: pi-004
 category: prompt-injection
 difficulty: advanced
 layers: [5, 6, 7]
